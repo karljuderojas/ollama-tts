@@ -48,7 +48,7 @@ SETTINGS_FILE = Path(__file__).parent / "settings.json"
 
 VERSION        = "1.0.0"
 GITHUB_REPO    = "karljuderojas/ollama-tts"
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/master/main.py"
 
 
 # ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -794,15 +794,17 @@ class App:
         self._update_btn.config(text="Checking…", state=tk.DISABLED)
         def run():
             try:
-                import urllib.request as _ur, json as _js
-                req = _ur.Request(GITHUB_API_URL,
-                                  headers={'Accept': 'application/vnd.github+json',
-                                           'User-Agent': 'ollama-tts-updater'})
+                import urllib.request as _ur
+                req = _ur.Request(GITHUB_RAW_URL,
+                                  headers={'User-Agent': 'ollama-tts-updater'})
                 with _ur.urlopen(req, timeout=10) as r:
-                    data = _js.loads(r.read())
-                tag = data['tag_name']
-                if self._version_gt(tag.lstrip('v'), VERSION):
-                    self.root.after(0, lambda: self._on_update_available(tag))
+                    content = r.read().decode('utf-8')
+                m = re.search(r'^VERSION\s*=\s*"([^"]+)"', content, re.MULTILINE)
+                if not m:
+                    raise ValueError("Could not parse version from remote file")
+                remote = m.group(1)
+                if self._version_gt(remote, VERSION):
+                    self.root.after(0, lambda: self._on_update_available(remote))
                 else:
                     self.root.after(0, self._on_up_to_date)
             except Exception as exc:
@@ -814,11 +816,11 @@ class App:
                                 fg=self.MUTED, command=self._check_for_updates)
         self.root.after(3000, lambda: self._update_btn.config(text="Check for updates"))
 
-    def _on_update_available(self, tag):
+    def _on_update_available(self, version):
         self._update_btn.config(
-            text=f"Download update {tag}  ↓",
+            text=f"Download update v{version}  ↓",
             fg=self.YELLOW, state=tk.NORMAL,
-            command=lambda: self._download_update(tag),
+            command=self._download_update,
         )
 
     def _on_update_error(self, msg):
@@ -826,14 +828,13 @@ class App:
                                 command=self._check_for_updates)
         self._status(f"Update check failed: {msg[:80]}")
 
-    def _download_update(self, tag):
+    def _download_update(self):
         self._update_btn.config(text="Downloading…", state=tk.DISABLED)
-        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{tag}/main.py"
         def run():
             try:
                 import urllib.request as _ur
                 tmp = Path(__file__).with_suffix('.py.tmp')
-                _ur.urlretrieve(url, tmp)
+                _ur.urlretrieve(GITHUB_RAW_URL, tmp)
                 tmp.replace(Path(__file__))
                 self.root.after(0, self._on_download_done)
             except Exception as exc:
