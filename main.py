@@ -612,11 +612,11 @@ class App:
 
         self._update_btn = tk.Button(
             sp, text="Check for updates", command=self._check_for_updates,
-            bg=self.SURFACE, fg=self.MUTED, font=("Segoe UI", 9),
+            bg=self.BORDER, fg=self.FG, font=("Segoe UI", 9, 'bold'),
             relief=tk.FLAT, padx=16, pady=6, cursor='hand2',
-            activebackground=self.SURFACE, activeforeground=self.FG,
+            activebackground=self.MUTED, activeforeground=self.FG,
         )
-        self._update_btn.grid(row=2, column=0, columnspan=3, sticky='w', padx=(8, 0))
+        self._update_btn.grid(row=2, column=0, columnspan=3, sticky='w', padx=(12, 0), pady=(8, 4))
 
         # System prompt toggle (always visible in _middle)
         self._sp_toggle_row = sp_toggle_row = tk.Frame(self._middle, bg=self.BG)
@@ -813,8 +813,8 @@ class App:
 
     def _on_up_to_date(self):
         self._update_btn.config(text="Up to date ✓", state=tk.NORMAL,
-                                fg=self.MUTED, command=self._check_for_updates)
-        self.root.after(3000, lambda: self._update_btn.config(text="Check for updates"))
+                                fg=self.FG, command=self._check_for_updates)
+        self.root.after(3000, lambda: self._update_btn.config(text="Check for updates", fg=self.FG))
 
     def _on_update_available(self, version):
         self._update_btn.config(
@@ -824,7 +824,7 @@ class App:
         )
 
     def _on_update_error(self, msg):
-        self._update_btn.config(text="Check for updates", state=tk.NORMAL, fg=self.MUTED,
+        self._update_btn.config(text="Check for updates", state=tk.NORMAL, fg=self.FG,
                                 command=self._check_for_updates)
         self._status(f"Update check failed: {msg[:80]}")
 
