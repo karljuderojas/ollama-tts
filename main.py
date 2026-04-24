@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import threading
 import queue
 import time
@@ -675,6 +675,14 @@ class App:
                 self.kokoro_btn.grid(row=0, column=6)
                 self._status("Kokoro not installed — click 'Install kokoro-onnx…'")
                 self.voice_cb['values'] = []
+                if _ is not None:
+                    messagebox.showwarning(
+                        "Kokoro not installed",
+                        "The kokoro-onnx and sounddevice packages are not installed.\n\n"
+                        "Click 'Install kokoro-onnx…' in the settings panel to install them automatically, "
+                        "or run:\n\n    pip install kokoro-onnx sounddevice",
+                        parent=self.root,
+                    )
             elif not KokoroEngine.models_present():
                 self.kokoro_btn.config(text="Download models (330 MB)…")
                 self.kokoro_btn.grid(row=0, column=6)
