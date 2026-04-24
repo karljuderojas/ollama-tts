@@ -441,6 +441,7 @@ class App:
         self.sys_prompt.bind('<FocusOut>', lambda _: self._save_settings())
         self._load_ollama_models()
         self.root.bind('<Escape>', lambda _: self._on_escape())
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── UI ───────────────────────────────────────────────────────────────────
 
@@ -702,6 +703,12 @@ class App:
             self._sp_btn.config(text="▾  System prompt")
 
     # ── Escape key ───────────────────────────────────────────────────────────
+
+    def _on_close(self):
+        self.stop_tts()
+        self.stt.stop()
+        self.root.destroy()
+        sys.exit(0)
 
     def _on_escape(self):
         if self._mic_active:
