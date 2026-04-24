@@ -46,7 +46,6 @@ KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/downlo
 STT_MODELS    = ["tiny", "base", "small", "medium"]
 SETTINGS_FILE = Path(__file__).parent / "settings.json"
 
-VERSION        = "1.0.0"
 GITHUB_REPO    = "karljuderojas/ollama-tts"
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/master/main.py"
 
@@ -798,12 +797,9 @@ class App:
                 req = _ur.Request(GITHUB_RAW_URL,
                                   headers={'User-Agent': 'ollama-tts-updater'})
                 with _ur.urlopen(req, timeout=10) as r:
-                    content = r.read().decode('utf-8')
-                m = re.search(r'^VERSION\s*=\s*"([^"]+)"', content, re.MULTILINE)
-                if not m:
-                    raise ValueError("Could not parse version from remote file")
-                remote = m.group(1)
-                if self._version_gt(remote, VERSION):
+                    remote = r.read()
+                local = Path(__file__).read_bytes()
+                if remote != local:
                     self.root.after(0, lambda: self._on_update_available(remote))
                 else:
                     self.root.after(0, self._on_up_to_date)
@@ -816,9 +812,10 @@ class App:
                                 fg=self.FG, command=self._check_for_updates)
         self.root.after(3000, lambda: self._update_btn.config(text="Check for updates", fg=self.FG))
 
-    def _on_update_available(self, version):
+    def _on_update_available(self, content: bytes):
+        self._pending_update = content
         self._update_btn.config(
-            text=f"Download update v{version}  ↓",
+            text="Update available  ↓",
             fg=self.YELLOW, state=tk.NORMAL,
             command=self._download_update,
         )
@@ -829,12 +826,12 @@ class App:
         self._status(f"Update check failed: {msg[:80]}")
 
     def _download_update(self):
-        self._update_btn.config(text="Downloading…", state=tk.DISABLED)
+        self._update_btn.config(text="Applying…", state=tk.DISABLED)
+        content = self._pending_update
         def run():
             try:
-                import urllib.request as _ur
                 tmp = Path(__file__).with_suffix('.py.tmp')
-                _ur.urlretrieve(GITHUB_RAW_URL, tmp)
+                tmp.write_bytes(content)
                 tmp.replace(Path(__file__))
                 self.root.after(0, self._on_download_done)
             except Exception as exc:
@@ -850,15 +847,6 @@ class App:
         self._update_btn.config(text="Download failed — retry?", state=tk.NORMAL,
                                 fg=self.RED, command=self._check_for_updates)
         self._status(f"Download failed: {msg[:80]}")
-
-    @staticmethod
-    def _version_gt(a: str, b: str) -> bool:
-        def t(v):
-            return tuple(int(x) for x in v.split('.'))
-        try:
-            return t(a) > t(b)
-        except ValueError:
-            return False
 
     # ── Voice dropdowns ───────────────────────────────────────────────────────
 
