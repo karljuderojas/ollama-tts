@@ -44,6 +44,10 @@ KOKORO_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/downlo
 STT_MODELS    = ["tiny", "base", "small", "medium"]
 SETTINGS_FILE = Path(__file__).parent / "settings.json"
 
+VERSION        = "1.0.0"
+GITHUB_REPO    = "karljuderojas/ollama-tts"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
 
 # ── Tooltip ───────────────────────────────────────────────────────────────────
 
@@ -601,7 +605,15 @@ class App:
         # placed at column=6 by _on_engine_change when needed
 
         tk.Frame(sp, bg=self.BORDER, height=1).grid(
-            row=1, column=0, columnspan=7, sticky='ew', pady=(10, 0))
+            row=1, column=0, columnspan=8, sticky='ew', pady=(10, 0))
+
+        self._update_btn = tk.Button(
+            sp, text="Check for updates", command=self._check_for_updates,
+            bg=self.SURFACE, fg=self.MUTED, font=("Segoe UI", 9),
+            relief=tk.FLAT, padx=16, pady=6, cursor='hand2',
+            activebackground=self.SURFACE, activeforeground=self.FG,
+        )
+        self._update_btn.grid(row=2, column=0, columnspan=3, sticky='w', padx=(8, 0))
 
         # System prompt toggle (always visible in _middle)
         self._sp_toggle_row = sp_toggle_row = tk.Frame(self._middle, bg=self.BG)
@@ -766,6 +778,77 @@ class App:
                 on_error=lambda e: self.root.after(
                     0, lambda: self._status(f"Download error: {e}")),
             )
+
+    # ── Updates ──────────────────────────────────────────────────────────────
+
+    def _check_for_updates(self):
+        self._update_btn.config(text="Checking…", state=tk.DISABLED)
+        def run():
+            try:
+                import urllib.request as _ur, json as _js
+                req = _ur.Request(GITHUB_API_URL,
+                                  headers={'Accept': 'application/vnd.github+json',
+                                           'User-Agent': 'ollama-tts-updater'})
+                with _ur.urlopen(req, timeout=10) as r:
+                    data = _js.loads(r.read())
+                tag = data['tag_name']
+                if self._version_gt(tag.lstrip('v'), VERSION):
+                    self.root.after(0, lambda: self._on_update_available(tag))
+                else:
+                    self.root.after(0, self._on_up_to_date)
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self._on_update_error(str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_up_to_date(self):
+        self._update_btn.config(text="Up to date ✓", state=tk.NORMAL,
+                                fg=self.MUTED, command=self._check_for_updates)
+        self.root.after(3000, lambda: self._update_btn.config(text="Check for updates"))
+
+    def _on_update_available(self, tag):
+        self._update_btn.config(
+            text=f"Download update {tag}  ↓",
+            fg=self.YELLOW, state=tk.NORMAL,
+            command=lambda: self._download_update(tag),
+        )
+
+    def _on_update_error(self, msg):
+        self._update_btn.config(text="Check for updates", state=tk.NORMAL, fg=self.MUTED,
+                                command=self._check_for_updates)
+        self._status(f"Update check failed: {msg[:80]}")
+
+    def _download_update(self, tag):
+        self._update_btn.config(text="Downloading…", state=tk.DISABLED)
+        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{tag}/main.py"
+        def run():
+            try:
+                import urllib.request as _ur
+                tmp = Path(__file__).with_suffix('.py.tmp')
+                _ur.urlretrieve(url, tmp)
+                tmp.replace(Path(__file__))
+                self.root.after(0, self._on_download_done)
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self._on_download_error(str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_download_done(self):
+        self._update_btn.config(text="Restart to apply  ↺", state=tk.NORMAL,
+                                fg=self.FG, command=self._check_for_updates)
+        self._status("Update downloaded — restart the app to apply it", highlight=True)
+
+    def _on_download_error(self, msg):
+        self._update_btn.config(text="Download failed — retry?", state=tk.NORMAL,
+                                fg=self.RED, command=self._check_for_updates)
+        self._status(f"Download failed: {msg[:80]}")
+
+    @staticmethod
+    def _version_gt(a: str, b: str) -> bool:
+        def t(v):
+            return tuple(int(x) for x in v.split('.'))
+        try:
+            return t(a) > t(b)
+        except ValueError:
+            return False
 
     # ── Voice dropdowns ───────────────────────────────────────────────────────
 
