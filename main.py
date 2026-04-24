@@ -93,39 +93,50 @@ class SAPIEngine:
 
     def _run(self):
         pythoncom.CoInitialize()
-        v = win32com.client.Dispatch("SAPI.SpVoice")
-        tokens = v.GetVoices()
-        self._tokens = [tokens.Item(i) for i in range(tokens.Count)]
-        self._on_ready([t.GetDescription() for t in self._tokens])
+        try:
+            v = win32com.client.Dispatch("SAPI.SpVoice")
+            tokens = v.GetVoices()
+            self._tokens = [tokens.Item(i) for i in range(tokens.Count)]
+            self._on_ready([t.GetDescription() for t in self._tokens])
+        except Exception as exc:
+            print(f"SAPI init error: {exc}")
+            return
 
         while True:
             try:
                 cmd = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
+            except Exception:
+                break
 
-            if cmd['action'] == 'stop':
-                v.Speak('', self._PURGE | self._ASYNC)
-            elif cmd['action'] == 'speak':
-                idx = cmd['voice_idx']
-                if 0 <= idx < len(self._tokens):
-                    v.Voice = self._tokens[idx]
-                v.Rate   = self._live_rate
-                v.Volume = self._live_vol
-                v.Speak('', self._PURGE | self._ASYNC)
-                v.Speak(cmd['text'], self._ASYNC)
-
-                stopped_early = False
-                while v.Status.RunningState == 2:
-                    time.sleep(0.04)
+            try:
+                if cmd['action'] == 'stop':
+                    v.Speak('', self._PURGE | self._ASYNC)
+                elif cmd['action'] == 'speak':
+                    idx = cmd['voice_idx']
+                    if 0 <= idx < len(self._tokens):
+                        v.Voice = self._tokens[idx]
                     v.Rate   = self._live_rate
                     v.Volume = self._live_vol
-                    if not self._queue.empty():
-                        v.Speak('', self._PURGE | self._ASYNC)
-                        stopped_early = True
-                        break
+                    v.Speak('', self._PURGE | self._ASYNC)
+                    v.Speak(cmd['text'], self._ASYNC)
 
-                if not stopped_early and cmd.get('on_done'):
+                    stopped_early = False
+                    while v.Status.RunningState == 2:
+                        time.sleep(0.04)
+                        v.Rate   = self._live_rate
+                        v.Volume = self._live_vol
+                        if not self._queue.empty():
+                            v.Speak('', self._PURGE | self._ASYNC)
+                            stopped_early = True
+                            break
+
+                    if not stopped_early and cmd.get('on_done'):
+                        cmd['on_done']()
+            except Exception as exc:
+                print(f"SAPI speak error: {exc}")
+                if cmd.get('on_done'):
                     cmd['on_done']()
 
     def speak(self, text, voice_idx, rate, volume, on_done=None):
@@ -198,16 +209,22 @@ class KokoroEngine:
                 done_evt = threading.Event()
 
                 def callback(outdata, frames, _time, _status):
-                    vol   = get_volume()
-                    chunk = samples[pos[0]:pos[0] + frames]
-                    n     = len(chunk)
-                    if n < frames:
-                        outdata[:n, 0]  = chunk * vol
-                        outdata[n:, :]  = 0
+                    try:
+                        vol   = get_volume()
+                        chunk = samples[pos[0]:pos[0] + frames]
+                        n     = len(chunk)
+                        if n < frames:
+                            outdata[:n, 0]  = chunk * vol
+                            outdata[n:, :]  = 0
+                            raise sd.CallbackStop()
+                        else:
+                            outdata[:, 0] = chunk * vol
+                        pos[0] += frames
+                    except sd.CallbackStop:
+                        raise
+                    except Exception:
+                        outdata[:] = 0
                         raise sd.CallbackStop()
-                    else:
-                        outdata[:, 0] = chunk * vol
-                    pos[0] += frames
 
                 stream = sd.OutputStream(
                     samplerate=sr, channels=1, dtype='float32',
@@ -1298,6 +1315,7 @@ def _crash_popup(exc_type, exc_val, exc_tb, parent=None):
 def main():
     root = tk.Tk()
     root.report_callback_exception = lambda *args: _crash_popup(*args, parent=root)
+    threading.excepthook = lambda a: _crash_popup(a.exc_type, a.exc_value, a.exc_traceback, parent=root)
     try:
         App(root)
         root.mainloop()
