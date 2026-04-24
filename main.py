@@ -6,6 +6,8 @@ import queue
 import time
 import re
 import json
+import sys
+import traceback
 import webbrowser
 from pathlib import Path
 from collections import deque
@@ -1247,10 +1249,64 @@ class App:
         )
 
 
+def _crash_popup(exc_type, exc_val, exc_tb, parent=None):
+    tb = ''.join(traceback.format_exception(exc_type, exc_val, exc_tb))
+    print(tb, file=sys.stderr)
+    try:
+        if parent:
+            win = tk.Toplevel(parent)
+        else:
+            win = tk.Tk()
+
+        win.title("Ollama Voice — Unexpected Error")
+        win.configure(bg="#1a1a1a")
+        win.geometry("620x380")
+        win.resizable(True, True)
+        win.lift()
+        win.focus_force()
+
+        tk.Label(win, text="Ollama Voice crashed unexpectedly",
+                 bg="#1a1a1a", fg="#ebebeb",
+                 font=("Segoe UI", 12, "bold")).pack(anchor='w', padx=24, pady=(20, 2))
+
+        tk.Label(win, text=f"{exc_type.__name__}: {exc_val}",
+                 bg="#1a1a1a", fg="#aaaaaa", font=("Segoe UI", 10),
+                 wraplength=570, justify=tk.LEFT).pack(anchor='w', padx=24, pady=(0, 10))
+
+        txt = scrolledtext.ScrolledText(
+            win, bg="#111111", fg="#888888", font=("Consolas", 9),
+            relief=tk.FLAT, padx=10, pady=8)
+        txt.pack(fill=tk.BOTH, expand=True, padx=24)
+        txt.insert(tk.END, tb)
+        txt.config(state=tk.DISABLED)
+
+        row = tk.Frame(win, bg="#1a1a1a")
+        row.pack(fill=tk.X, padx=24, pady=16)
+
+        tk.Button(row, text="Copy traceback",
+                  command=lambda: (win.clipboard_clear(), win.clipboard_append(tb)),
+                  bg="#272727", fg="#ebebeb", font=("Segoe UI", 10),
+                  relief=tk.FLAT, padx=12, pady=4, cursor='hand2').pack(side=tk.LEFT)
+        tk.Button(row, text="Close", command=win.destroy,
+                  bg="#ffffff", fg="#111111", font=("Segoe UI", 10, "bold"),
+                  relief=tk.FLAT, padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT)
+
+        if parent:
+            win.grab_set()
+        else:
+            win.mainloop()
+    except Exception:
+        pass
+
+
 def main():
     root = tk.Tk()
-    App(root)
-    root.mainloop()
+    root.report_callback_exception = lambda *args: _crash_popup(*args, parent=root)
+    try:
+        App(root)
+        root.mainloop()
+    except Exception:
+        _crash_popup(*sys.exc_info())
 
 
 if __name__ == "__main__":
