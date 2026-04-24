@@ -82,6 +82,8 @@ class SAPIEngine:
     def __init__(self, on_ready):
         self._queue = queue.Queue()
         self._on_ready = on_ready
+        self._live_rate = 0
+        self._live_vol  = 100
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -103,14 +105,16 @@ class SAPIEngine:
                 idx = cmd['voice_idx']
                 if 0 <= idx < len(self._tokens):
                     v.Voice = self._tokens[idx]
-                v.Rate   = cmd['rate']
-                v.Volume = cmd['volume']
+                v.Rate   = self._live_rate
+                v.Volume = self._live_vol
                 v.Speak('', self._PURGE | self._ASYNC)
                 v.Speak(cmd['text'], self._ASYNC)
 
                 stopped_early = False
                 while v.Status.RunningState == 2:
                     time.sleep(0.04)
+                    v.Rate   = self._live_rate
+                    v.Volume = self._live_vol
                     if not self._queue.empty():
                         v.Speak('', self._PURGE | self._ASYNC)
                         stopped_early = True
@@ -120,9 +124,15 @@ class SAPIEngine:
                     cmd['on_done']()
 
     def speak(self, text, voice_idx, rate, volume, on_done=None):
+        self._live_rate = rate
+        self._live_vol  = volume
         self._drain()
         self._queue.put({'action': 'speak', 'text': text, 'voice_idx': voice_idx,
-                         'rate': rate, 'volume': volume, 'on_done': on_done})
+                         'on_done': on_done})
+
+    def update_live(self, rate, volume):
+        self._live_rate = rate
+        self._live_vol  = volume
 
     def stop(self):
         self._drain()
@@ -140,8 +150,9 @@ class SAPIEngine:
 
 class KokoroEngine:
     def __init__(self):
-        self._kokoro = None
+        self._kokoro   = None
         self._stop_evt = threading.Event()
+        self._stream   = None
 
     @staticmethod
     def package_installed() -> bool:
@@ -160,7 +171,7 @@ class KokoroEngine:
         from kokoro_onnx import Kokoro
         self._kokoro = Kokoro(str(MODEL_ONNX), str(MODEL_VOICES_BIN))
 
-    def speak(self, text, voice_code, speed, volume, on_done=None):
+    def speak(self, text, voice_code, get_speed, get_volume, on_done=None):
         import sounddevice as sd
         self._stop_evt.clear()
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()] or [text]
@@ -171,14 +182,39 @@ class KokoroEngine:
                     return
                 try:
                     samples, sr = self._kokoro.create(sent, voice=voice_code,
-                                                      speed=speed, lang="en-us")
+                                                      speed=get_speed(), lang="en-us")
                 except Exception as exc:
                     print(f"Kokoro error: {exc}")
                     return
                 if self._stop_evt.is_set():
                     return
-                sd.play(samples * volume, sr)
-                sd.wait()
+
+                pos      = [0]
+                done_evt = threading.Event()
+
+                def callback(outdata, frames, _time, _status):
+                    vol   = get_volume()
+                    chunk = samples[pos[0]:pos[0] + frames]
+                    n     = len(chunk)
+                    if n < frames:
+                        outdata[:n, 0]  = chunk * vol
+                        outdata[n:, :]  = 0
+                        raise sd.CallbackStop()
+                    else:
+                        outdata[:, 0] = chunk * vol
+                    pos[0] += frames
+
+                stream = sd.OutputStream(
+                    samplerate=sr, channels=1, dtype='float32',
+                    callback=callback,
+                    finished_callback=lambda: done_evt.set(),
+                )
+                self._stream = stream
+                stream.start()
+                done_evt.wait()
+                stream.close()
+                self._stream = None
+
                 if self._stop_evt.is_set():
                     return
             if on_done:
@@ -187,12 +223,13 @@ class KokoroEngine:
         threading.Thread(target=run, daemon=True).start()
 
     def stop(self):
-        import sounddevice as sd
         self._stop_evt.set()
-        try:
-            sd.stop()
-        except Exception:
-            pass
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.stop()
+            except Exception:
+                pass
 
     def download_models(self, on_progress, on_done, on_error):
         import urllib.request
@@ -392,8 +429,8 @@ class App:
         self._apply_saved_settings(self._saved_settings)
         self.root.after(300, self._first_run_popup)
         self._on_engine_change()
-        self.rate_var.trace_add('write', lambda *_: self._save_settings())
-        self.vol_var.trace_add('write',  lambda *_: self._save_settings())
+        self.rate_var.trace_add('write', lambda *_: self._on_slider_change())
+        self.vol_var.trace_add('write',  lambda *_: self._on_slider_change())
         self.voice_cb.bind('<<ComboboxSelected>>', lambda _: self._save_settings())
         self.sys_prompt.bind('<FocusOut>', lambda _: self._save_settings())
         self._load_ollama_models()
@@ -474,7 +511,7 @@ class App:
 
         for label, cmd, color in [
             ("Clear",   self._clear_chat, self.MUTED),
-            ("Stop",    self.stop_tts,    self.MUTED),
+            ("Stop",    self.stop_tts,    self.RED),
         ]:
             tk.Button(
                 right, text=label, command=cmd,
@@ -930,8 +967,9 @@ class App:
                 on_done()
                 return
             self.kokoro.speak(clean, voice_code=KOKORO_VOICES[idx][0],
-                              speed=self.rate_var.get() / 175,
-                              volume=self.vol_var.get() / 100, on_done=on_done)
+                              get_speed=lambda: self.rate_var.get() / 175,
+                              get_volume=lambda: self.vol_var.get() / 100,
+                              on_done=on_done)
 
     def stop_tts(self):
         if self._active_engine == self.ENGINE_SAPI:
@@ -946,6 +984,14 @@ class App:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _on_slider_change(self):
+        self._save_settings()
+        if self._active_engine == self.ENGINE_SAPI:
+            self.sapi.update_live(
+                rate=self._sapi_rate(self.rate_var.get()),
+                volume=self.vol_var.get(),
+            )
+
     @staticmethod
     def _sapi_rate(wpm: int) -> int:
         return max(-10, min(10, round((wpm - 175) / 17.5)))
@@ -959,6 +1005,11 @@ class App:
         text = re.sub(r'#{1,6}\s*', '', text)
         text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'[—–]', ', ', text)       # em/en dashes → brief comma pause
+        text = re.sub(r'\.{2,}|…', '.', text)    # ellipses → single period
+        text = re.sub(r';', ',', text)            # semicolons → lighter comma pause
+        text = re.sub(r',(\s*,)+', ',', text)    # collapse repeated commas
+        text = re.sub(r' {2,}', ' ', text)       # collapse extra spaces
         return text.strip()
 
     def _chat_append(self, text, tag):
@@ -1044,6 +1095,8 @@ class App:
         dlg.configure(bg=self.SURFACE)
         dlg.resizable(False, False)
         dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
 
         dlg.update_idletasks()
         w, h = 440, 300
