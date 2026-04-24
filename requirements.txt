@@ -1,0 +1,8 @@
+# Core (required)
+ollama>=0.3.0
+pywin32>=223        # provides pythoncom + win32com for Windows SAPI
+
+# Kokoro neural voices (optional — install to unlock 15 extra voices)
+# The app will prompt you to install these when you select the Kokoro engine.
+kokoro-onnx>=0.4.0
+sounddevice>=0.4.0
